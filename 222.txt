@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>StrategyN1Bot — 5m Pro Strategy</title>
+  <style>
+    body { background: #0b0c10; color: #c5c6c7; font-family: Arial, sans-serif; padding: 20px; }
+    h1 { color: #66fcf1; text-align: center; }
+    .log { height: 60vh; overflow-y: scroll; background: #1f2833; padding: 10px; border-radius: 5px; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>🚀 StrategyN1Bot – 5m Pro Scanner (GitHub Pages)</h1>
+  <div class="log" id="log">Запуск стратегии... Ожидайте сигналы.</div>
+
+  <script>
+    const TOKEN = "7491438546:AAEJpGBzOS7h_X54kYyrFks96FVehvwIIig";
+    const CHAT_ID = "1683260478";
+    const SYMBOLS = ["DOGEUSDT", "ADAUSDT", "SOLUSDT"]; // Для теста, можно расширить
+    const TF = "5m", LIMIT = 50;
+    const MIN_VOL_MULT = 2;
+    const INTERVAL = 5 * 60 * 1000;
+    const logEl = document.getElementById("log");
+    function log(t) {
+      const now = new Date().toLocaleTimeString();
+      logEl.innerHTML = `[${now}] ${t}<br>` + logEl.innerHTML;
+    }
+
+    async function fetchOH(symbol) {
+      const url = `https://corsproxy.io/?https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${TF}&limit=${LIMIT}`;
+      let r = await fetch(url);
+      if (!r.ok) throw new Error(r.statusText);
+      return r.json();
+    }
+
+    function RSI(arr, period = 14) {
+      let gains = 0, losses = 0;
+      for (let i = 1; i < arr.length; i++) {
+        let diff = arr[i] - arr[i - 1];
+        if (diff > 0) gains += diff;
+        else losses -= diff;
+      }
+      const rs = (gains / period) / (losses / period || 1);
+      return 100 - (100 / (1 + rs));
+    }
+
+    function EMA(arr, period) {
+      const k = 2 / (period + 1);
+      const ema = [arr.slice(0, period).reduce((a, b) => a + b) / period];
+      for (let i = period; i < arr.length; i++) {
+        ema.push(arr[i] * k + ema[ema.length - 1] * (1 - k));
+      }
+      return ema;
+    }
+
+    async function scan() {
+      for (let symbol of SYMBOLS) {
+        try {
+          const klines = await fetchOH(symbol);
+          const closes = klines.map(c => +c[4]);
+          const highs = klines.map(c => +c[2]);
+          const lows = klines.map(c => +c[3]);
+          const vols = klines.map(c => +c[5]);
+
+          const avgVol = vols.slice(-20).reduce((a, b) => a + b) / 20;
+          const curVol = vols[vols.length - 2];
+          if (curVol < avgVol * MIN_VOL_MULT) continue;
+
+          const rsi = RSI(closes.slice(-15));
+          const ema5 = EMA(closes, 5).at(-1);
+          const ema20 = EMA(closes, 20).at(-1);
+          const last = closes.at(-2);
+
+          if (!((ema5 > ema20 && rsi > 50) || (ema5 < ema20 && rsi < 50))) continue;
+
+          const maxH = Math.max(...highs.slice(-20));
+          const minL = Math.min(...lows.slice(-20));
+          const entry = last;
+          const stop = minL;
+          const take = entry + (entry - stop) * 4;
+          const rr = (take - entry) / (entry - stop);
+          if (rr < 3.9 || rr > 4.1) continue;
+
+          const dir = ema5 > ema20 ? "LONG" : "SHORT";
+          const msg = `<b>${symbol.replace("USDT", "")}</b> ➡️ <b>${dir}</b>\nTF: 5m 📈 Entry: ${entry.toFixed(4)} SL: ${stop.toFixed(4)} TP: ${take.toFixed(4)}\nR:R = 1:${rr.toFixed(2)} 📊 EMA5: ${ema5.toFixed(2)} EMA20: ${ema20.toFixed(2)} RSI: ${rsi.toFixed(1)} Vol×${(curVol / avgVol).toFixed(1)}`;
+
+          await fetch(`https://corsproxy.io/?https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: CHAT_ID, text: msg, parse_mode: "HTML" })
+          });
+
+          log(`📢 Сигнал: ${symbol} ${dir}`);
+        } catch (err) {
+          log(`❌ Ошибка по ${symbol}: ${err.message}`);
+        }
+      }
+    }
+
+    scan();
+    setInterval(scan, INTERVAL);
+  </script>
+</body>
+</html>
